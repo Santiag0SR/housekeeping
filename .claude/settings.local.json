@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npx next:*)",
+      "Bash(npm run:*)",
+      "Bash(curl -s http://localhost:3000/api/housekeeping)",
+      "Bash(python3 -c ':*)",
+      "Bash(node -e ':*)",
+      "mcp__ide__getDiagnostics"
+    ]
+  }
+}
