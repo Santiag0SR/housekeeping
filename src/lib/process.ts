@@ -37,7 +37,7 @@ function toLocalDate(utc: string): string {
 
 export interface ProcessedData {
   days: string[]
-  rooms: Omit<RoomDay, 'cleaningStatus' | 'cleanedAt'>[]
+  rooms: Omit<RoomDay, 'cleaningStatus' | 'cleanedAt' | 'crib'>[]
 }
 
 export function processRoomsAndReservations(
