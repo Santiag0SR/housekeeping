@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'next/navigation'
-import type { RoomDay, Building } from '@/types'
+import type { RoomDay } from '@/types'
 import { BUILDINGS } from '@/types'
 import Link from 'next/link'
 
@@ -18,6 +18,15 @@ function formatTime(utc: string | null) {
   if (!utc) return null
   const d = new Date(utc)
   return d.toTimeString().slice(0, 5)
+}
+
+function formatDuration(startedAt: string | null, finishedAt: string | null) {
+  if (!startedAt || !finishedAt) return null
+  const mins = Math.round((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 60000)
+  if (mins < 60) return `${mins} min`
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return m > 0 ? `${h}h ${m}min` : `${h}h`
 }
 
 interface RoomCard {
@@ -82,10 +91,10 @@ export default function BuildingPage() {
     return () => clearInterval(interval)
   }, [load])
 
-  async function markCleaned(roomDay: RoomDay) {
+  async function cleaningAction(roomDay: RoomDay, action: 'start' | 'finish' | 'cancel' | 'undo') {
     const key = `${roomDay.roomId}::${roomDay.date}`
     setUpdating(key)
-    const newStatus = roomDay.cleaningStatus === 'cleaned' ? 'pending' : 'cleaned'
+    const nowIso = new Date().toISOString()
     try {
       await fetch('/api/clean', {
         method: 'POST',
@@ -94,17 +103,28 @@ export default function BuildingPage() {
           roomId: roomDay.roomId,
           roomName: roomDay.roomName,
           date: roomDay.date,
-          status: newStatus,
+          action,
         }),
       })
+      // Optimistic update
       setRooms(prev => prev.map(room => {
         if (room.roomId !== roomDay.roomId) return room
         const updated = { ...room.days }
         if (updated[roomDay.date]) {
-          updated[roomDay.date] = {
-            ...updated[roomDay.date]!,
-            cleaningStatus: newStatus,
-            cleanedAt: newStatus === 'cleaned' ? new Date().toISOString() : null,
+          const rd = updated[roomDay.date]!
+          switch (action) {
+            case 'start':
+              updated[roomDay.date] = { ...rd, cleaningStatus: 'cleaning', cleaningStartedAt: nowIso, cleaningFinishedAt: null, cleanedAt: null }
+              break
+            case 'finish':
+              updated[roomDay.date] = { ...rd, cleaningStatus: 'cleaned', cleaningFinishedAt: nowIso, cleanedAt: nowIso }
+              break
+            case 'cancel':
+              updated[roomDay.date] = { ...rd, cleaningStatus: 'pending', cleaningStartedAt: null, cleaningFinishedAt: null }
+              break
+            case 'undo':
+              updated[roomDay.date] = { ...rd, cleaningStatus: 'pending', cleaningStartedAt: null, cleaningFinishedAt: null, cleanedAt: null }
+              break
           }
         }
         return { ...room, days: updated }
@@ -147,12 +167,9 @@ export default function BuildingPage() {
   }
 
   const buildingLabel = BUILDINGS.find(b => b.id === building)?.label ?? building.toUpperCase()
-  // Use Spain local date, not UTC
-  const now = new Date()
-  const spainDate = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }))
+  const spainDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Madrid' }))
   const todayStr = `${spainDate.getFullYear()}-${String(spainDate.getMonth() + 1).padStart(2, '0')}-${String(spainDate.getDate()).padStart(2, '0')}`
 
-  // Get rooms for a specific day, grouped by task type
   function getRoomsForDay(date: string) {
     const checkouts: { room: RoomCard; rd: RoomDay }[] = []
     const checkins: { room: RoomCard; rd: RoomDay }[] = []
@@ -178,10 +195,105 @@ export default function BuildingPage() {
     })
   }
 
-  // Today summary
   const todayData = getRoomsForDay(todayStr)
   const todayCheckoutsTotal = todayData.checkouts.length
   const todayCheckoutsCleaned = todayData.checkouts.filter(c => c.rd.cleaningStatus === 'cleaned').length
+
+  // Render cleaning button for checkout cards
+  function renderCleaningButton(rd: RoomDay, isUpdating: boolean) {
+    const status = rd.cleaningStatus
+
+    if (status === 'pending') {
+      return (
+        <button
+          onClick={() => cleaningAction(rd, 'start')}
+          disabled={isUpdating}
+          style={{
+            flex: 1,
+            padding: '8px 0',
+            borderRadius: 8,
+            border: '1px solid var(--accent)',
+            background: 'rgba(79, 142, 247, 0.15)',
+            color: 'var(--accent)',
+            fontSize: 13,
+            fontWeight: 700,
+            transition: 'all 0.15s',
+          }}
+        >
+          {isUpdating ? '...' : '▶ Empezar limpieza'}
+        </button>
+      )
+    }
+
+    if (status === 'cleaning') {
+      return (
+        <div style={{ display: 'flex', gap: 6, flex: 1 }}>
+          <button
+            onClick={() => cleaningAction(rd, 'finish')}
+            disabled={isUpdating}
+            style={{
+              flex: 1,
+              padding: '8px 0',
+              borderRadius: 8,
+              border: '1px solid var(--cleaned-text)',
+              background: 'rgba(79, 201, 126, 0.15)',
+              color: 'var(--cleaned-text)',
+              fontSize: 13,
+              fontWeight: 700,
+            }}
+          >
+            {isUpdating ? '...' : '✓ Finalizar limpieza'}
+          </button>
+          <button
+            onClick={() => cleaningAction(rd, 'cancel')}
+            disabled={isUpdating}
+            style={{
+              padding: '5px 10px',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'var(--surface2)',
+              color: 'var(--muted)',
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )
+    }
+
+    // cleaned
+    return (
+      <div style={{ flex: 1 }}>
+        <button
+          onClick={() => cleaningAction(rd, 'undo')}
+          disabled={isUpdating}
+          style={{
+            width: '100%',
+            padding: '5px 0',
+            borderRadius: 8,
+            border: '1px solid #2a5c3f',
+            background: '#1a3028',
+            color: 'var(--cleaned-text)',
+            fontSize: 11,
+            fontWeight: 600,
+            transition: 'all 0.15s',
+          }}
+        >
+          {isUpdating ? '...' : '↩ Desmarcar'}
+        </button>
+        <div style={{ fontSize: 11, color: 'var(--cleaned-text)', marginTop: 4, textAlign: 'center' }}>
+          ✅ {formatTime(rd.cleanedAt)}
+          {rd.cleaningStartedAt && rd.cleaningFinishedAt && (
+            <span style={{ color: 'var(--muted)', marginLeft: 6 }}>
+              {formatDuration(rd.cleaningStartedAt, rd.cleaningFinishedAt)}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -218,6 +330,21 @@ export default function BuildingPage() {
             ))}
           </nav>
 
+          <Link
+            href="/admin"
+            style={{
+              fontSize: 12,
+              color: 'var(--muted)',
+              padding: '6px 10px',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'var(--surface2)',
+              flexShrink: 0,
+            }}
+          >
+            Admin
+          </Link>
+
           <button
             onClick={load}
             style={{
@@ -247,7 +374,6 @@ export default function BuildingPage() {
             </p>
           </div>
 
-          {/* Today progress - focused on checkouts */}
           {todayCheckoutsTotal > 0 && (
             <div style={{
               background: 'var(--surface)',
@@ -361,7 +487,6 @@ export default function BuildingPage() {
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                      {/* Counters */}
                       {checkouts.length > 0 && (
                         <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, fontWeight: 600, color: 'var(--checkout)' }}>
                           🔄 {cleanedCount}/{checkouts.length}
@@ -409,19 +534,28 @@ export default function BuildingPage() {
                             gap: 8,
                           }}>
                             {checkouts.map(({ room, rd }) => {
-                              const isCleaned = rd.cleaningStatus === 'cleaned'
+                              const status = rd.cleaningStatus
                               const key = `${rd.roomId}::${rd.date}`
-                              const isUpdating = key === updating
-                              // checkout+checkin same day: rd.checkIn is set by process.ts
+                              const isUpd = key === updating
                               const hasCheckinAfter = !!rd.checkIn
+                              const cardBg = status === 'cleaned'
+                                ? 'rgba(42, 92, 63, 0.3)'
+                                : status === 'cleaning'
+                                  ? 'rgba(79, 142, 247, 0.08)'
+                                  : 'rgba(229, 90, 90, 0.08)'
+                              const cardBorder = status === 'cleaned'
+                                ? '#2a5c3f'
+                                : status === 'cleaning'
+                                  ? 'rgba(79, 142, 247, 0.3)'
+                                  : 'rgba(229, 90, 90, 0.25)'
 
                               return (
                                 <div key={room.roomId} style={{
-                                  background: isCleaned ? 'rgba(42, 92, 63, 0.3)' : 'rgba(229, 90, 90, 0.08)',
-                                  border: `1px solid ${isCleaned ? '#2a5c3f' : 'rgba(229, 90, 90, 0.25)'}`,
+                                  background: cardBg,
+                                  border: `1px solid ${cardBorder}`,
                                   borderRadius: 10,
                                   padding: '10px 14px',
-                                  opacity: isUpdating ? 0.6 : 1,
+                                  opacity: isUpd ? 0.6 : 1,
                                   transition: 'all 0.2s',
                                 }}>
                                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -441,11 +575,6 @@ export default function BuildingPage() {
                                         </span>
                                       )}
                                     </div>
-                                    {isCleaned && (
-                                      <span style={{ fontSize: 11, color: 'var(--cleaned-text)', fontWeight: 600 }}>
-                                        ✅ {rd.cleanedAt ? formatTime(rd.cleanedAt) : 'Limpia'}
-                                      </span>
-                                    )}
                                   </div>
 
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
@@ -460,7 +589,6 @@ export default function BuildingPage() {
                                     )}
                                   </div>
 
-                                  {/* Checkin warning - when checkout+checkin same day */}
                                   {hasCheckinAfter && (
                                     <div style={{
                                       fontSize: 11,
@@ -480,7 +608,6 @@ export default function BuildingPage() {
                                     </div>
                                   )}
 
-                                  {/* Crib indicator */}
                                   {rd.crib && (
                                     <div style={{
                                       fontSize: 11,
@@ -497,26 +624,10 @@ export default function BuildingPage() {
                                   )}
 
                                   <div style={{ display: 'flex', gap: 6 }}>
-                                    <button
-                                      onClick={() => markCleaned(rd)}
-                                      disabled={isUpdating}
-                                      style={{
-                                        flex: 1,
-                                        padding: isCleaned ? '5px 0' : '8px 0',
-                                        borderRadius: 8,
-                                        border: `1px solid ${isCleaned ? '#2a5c3f' : 'var(--checkout)'}`,
-                                        background: isCleaned ? '#1a3028' : 'rgba(229, 90, 90, 0.15)',
-                                        color: isCleaned ? 'var(--cleaned-text)' : 'var(--checkout)',
-                                        fontSize: isCleaned ? 11 : 13,
-                                        fontWeight: 700,
-                                        transition: 'all 0.15s',
-                                      }}
-                                    >
-                                      {isUpdating ? '...' : isCleaned ? '↩ Desmarcar' : '✓ Marcar limpia'}
-                                    </button>
+                                    {renderCleaningButton(rd, isUpd)}
                                     <button
                                       onClick={() => toggleCrib(rd)}
-                                      disabled={isUpdating}
+                                      disabled={isUpd}
                                       style={{
                                         padding: '5px 8px',
                                         borderRadius: 8,

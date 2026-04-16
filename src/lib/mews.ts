@@ -40,3 +40,34 @@ export async function fetchMewsReservations(startUtc: string, endUtc: string) {
   if (!res.ok) throw new Error(`Mews reservations error: ${res.status}`)
   return res.json()
 }
+
+const CUNA_PRODUCT_ID = 'e97e8b00-f80e-4a3f-9fec-b42d00a99c2f'
+
+/** Fetch order items to find which reservations have a crib (cuna) product */
+export async function fetchMewsCribReservations(startUtc: string, endUtc: string): Promise<Set<string>> {
+  const res = await fetch(`${MEWS_BASE}/orderItems/getAll`, {
+    method: 'POST',
+    headers: MEWS_HEADERS,
+    body: JSON.stringify({
+      ...BASE_BODY,
+      CreatedUtc: { StartUtc: startUtc, EndUtc: endUtc },
+      Limitation: { Count: 1000 },
+    }),
+    cache: 'no-store',
+  })
+  if (!res.ok) return new Set()
+  const data = await res.json()
+  const items = data.OrderItems ?? []
+
+  // Collect reservation IDs that have an active (non-canceled) cuna product
+  const reservationIds = new Set<string>()
+  for (const item of items) {
+    if (
+      item.Data?.Product?.ProductId === CUNA_PRODUCT_ID &&
+      !item.CanceledUtc
+    ) {
+      reservationIds.add(item.ServiceOrderId)
+    }
+  }
+  return reservationIds
+}

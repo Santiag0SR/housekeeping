@@ -37,7 +37,7 @@ function toLocalDate(utc: string): string {
 
 export interface ProcessedData {
   days: string[]
-  rooms: Omit<RoomDay, 'cleaningStatus' | 'cleanedAt' | 'crib'>[]
+  rooms: (Omit<RoomDay, 'cleaningStatus' | 'cleanedAt' | 'crib'> & { incomingReservationId: string | null })[]
 }
 
 export function processRoomsAndReservations(
@@ -87,13 +87,15 @@ export function processRoomsAndReservations(
       let persons = 0
       let checkIn: string | null = null
       let checkOut: string | null = null
+      // Only the incoming/staying reservation ID (for crib matching)
+      let incomingReservationId: string | null = null
 
       if (checkoutRes && checkinRes) {
-        // Checkout + checkin same day: treat as checkout (change everything)
         taskType = 'checkout'
         persons = checkinRes.PersonCounts.reduce((s, p) => s + p.Count, 0)
         checkOut = checkoutRes.ScheduledEndUtc
         checkIn = checkinRes.StartUtc
+        incomingReservationId = checkinRes.Id
       } else if (checkoutRes) {
         taskType = 'checkout'
         persons = 0
@@ -102,14 +104,15 @@ export function processRoomsAndReservations(
         taskType = 'checkin'
         persons = checkinRes.PersonCounts.reduce((s, p) => s + p.Count, 0)
         checkIn = checkinRes.StartUtc
+        incomingReservationId = checkinRes.Id
       } else if (activeRes) {
         taskType = 'stayover'
         persons = activeRes.PersonCounts.reduce((s, p) => s + p.Count, 0)
+        incomingReservationId = activeRes.Id
       } else {
         taskType = 'empty'
       }
 
-      // Only include rooms that need attention (skip truly empty rooms with no activity all week)
       if (taskType === 'empty') continue
 
       result.push({
@@ -122,6 +125,7 @@ export function processRoomsAndReservations(
         sofaBed: persons > 2,
         checkIn,
         checkOut,
+        incomingReservationId,
       })
     }
   }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { fetchMewsResources, fetchMewsReservations } from '@/lib/mews'
+import { fetchMewsResources, fetchMewsReservations, fetchMewsCribReservations } from '@/lib/mews'
 import { processRoomsAndReservations, getWeekDays } from '@/lib/process'
 import { supabaseAdmin } from '@/lib/supabase'
 
@@ -16,9 +16,10 @@ export async function GET(req: NextRequest) {
     const endUtc = days[days.length - 1] + 'T23:59:59Z'
 
     // Fetch from Mews in parallel
-    const [resourcesData, reservationsData] = await Promise.all([
+    const [resourcesData, reservationsData, cribReservationIds] = await Promise.all([
       fetchMewsResources(),
       fetchMewsReservations(startUtc, endUtc),
+      fetchMewsCribReservations(startUtc, endUtc),
     ])
 
     const resources = resourcesData.Resources ?? []
@@ -31,28 +32,35 @@ export async function GET(req: NextRequest) {
     const db = supabaseAdmin()
     const { data: statuses } = await db
       .from('room_cleaning_status')
-      .select('room_id, date, status, cleaned_at, crib')
+      .select('room_id, date, status, cleaned_at, crib, cleaning_started_at, cleaning_finished_at')
       .gte('date', days[0])
       .lte('date', days[days.length - 1])
 
     // Merge cleaning statuses
-    const statusMap = new Map<string, { status: string; cleaned_at: string | null; crib: boolean }>()
+    const statusMap = new Map<string, { status: string; cleaned_at: string | null; crib: boolean; cleaning_started_at: string | null; cleaning_finished_at: string | null }>()
     for (const s of statuses ?? []) {
       statusMap.set(`${s.room_id}::${s.date}`, {
         status: s.status,
         cleaned_at: s.cleaned_at,
         crib: s.crib ?? false,
+        cleaning_started_at: s.cleaning_started_at ?? null,
+        cleaning_finished_at: s.cleaning_finished_at ?? null,
       })
     }
 
     const rooms = roomDays.map((r) => {
       const key = `${r.roomId}::${r.date}`
       const s = statusMap.get(key)
+      // Crib only for incoming reservation (checkin/stayover), not outgoing (checkout)
+      const mewsCrib = r.incomingReservationId ? cribReservationIds.has(r.incomingReservationId) : false
+      const { incomingReservationId, ...rest } = r
       return {
-        ...r,
-        cleaningStatus: (s?.status ?? 'pending') as 'pending' | 'cleaned',
+        ...rest,
+        cleaningStatus: (s?.status ?? 'pending') as 'pending' | 'cleaning' | 'cleaned',
         cleanedAt: s?.cleaned_at ?? null,
-        crib: s?.crib ?? false,
+        cleaningStartedAt: s?.cleaning_started_at ?? null,
+        cleaningFinishedAt: s?.cleaning_finished_at ?? null,
+        crib: mewsCrib || (s?.crib ?? false),
       }
     })
 

@@ -40,8 +40,10 @@ export interface RoomDay {
   sofaBed: boolean     // persons > 2
   checkIn: string | null
   checkOut: string | null
-  cleaningStatus: 'pending' | 'cleaned'
+  cleaningStatus: 'pending' | 'cleaning' | 'cleaned'
   cleanedAt: string | null
+  cleaningStartedAt: string | null
+  cleaningFinishedAt: string | null
   crib: boolean
 }
 
